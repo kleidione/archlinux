@@ -3,13 +3,32 @@
 # Função para verificar o status de execução
 check() {
     if [ $? -ne 0 ]; then
-        echo "Erro na execução. Saindo..."
+        echo "Erro na execução. Verifique o arquivo de log: install.log"
         exit 1
     fi
 }
 
-# Funções de configuração
+# Função para verificar comandos essenciais
+verificar_comandos() {
+    echo "Verificando comandos necessários..."
+    for cmd in parted mkfs.ext4 pacstrap arch-chroot timedatectl; do
+        command -v $cmd > /dev/null 2>&1 || { echo "Comando $cmd não encontrado. Instale antes de continuar."; exit 1; }
+    done
+    echo "Todos os comandos necessários estão disponíveis."
+}
 
+# Função para configurar logs
+iniciar_log() {
+    exec > >(tee install.log) 2>&1
+}
+
+# Confirmar antes de formatar o disco
+confirmar_particionamento() {
+    read -p "O disco $DISK será formatado. Deseja continuar? (s/n) " resposta
+    [[ $resposta != "s" ]] && { echo "Particionamento abortado."; exit 1; }
+}
+
+# Funções de configuração
 configurar_fuso_horario() {
     echo "Configurando o fuso horário..."
     timedatectl set-timezone $TIMEZONE
@@ -25,32 +44,55 @@ configurar_locale() {
     check
 }
 
-configurar_rede() {
-    echo "Configurando a rede..."
-    systemctl enable dhcpcd
-    systemctl enable NetworkManager
-    check
+# Receber senhas com confirmação
+ler_senha() {
+    local senha
+    local confirmacao
+    while true; do
+        echo "Digite a senha para $1:"
+        read -s senha
+        echo "Confirme a senha:"
+        read -s confirmacao
+        [[ "$senha" == "$confirmacao" ]] && { echo "$senha"; return; }
+        echo "As senhas não coincidem. Tente novamente."
+    done
 }
 
-# Definir as variáveis fixas
-HOSTNAME="archlinux"
-USER="kleidione"
+# Início do script
+iniciar_log
+verificar_comandos
+
+# Definir variáveis com suporte a argumentos
 DISK="/dev/nvme0n1"
 TIMEZONE="America/Belem"
 LOCALE="pt-BR.UTF-8"
 KEYMAP="br-abnt2"
+HOSTNAME="archlinux"
+USER="kleidione"
 
-# Perguntar as preferências do usuário
-echo "Digite a senha do usuário $USER:"
-read -s PASSWORD
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --disk) DISK="$2"; shift ;;
+        --timezone) TIMEZONE="$2"; shift ;;
+        --user) USER="$2"; shift ;;
+        *) echo "Opção desconhecida: $1"; exit 1 ;;
+    esac
+    shift
+done
 
-echo "Digite a senha do root:"
-read -s ROOT_PASSWORD
+# Obter senhas do usuário
+PASSWORD=$(ler_senha "usuário $USER")
+ROOT_PASSWORD=$(ler_senha "root")
+
+# Confirmar particionamento
+confirmar_particionamento
 
 # Particionamento e formatação do disco
 echo "Particionando o disco e criando swapfile..."
 parted $DISK mklabel gpt
+check
 parted $DISK mkpart primary ext4 1MiB 100%
+check
 mkfs.ext4 ${DISK}p1
 check
 mount ${DISK}p1 /mnt
